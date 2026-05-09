@@ -12,3 +12,4 @@ antropy==0.1.6
 gunicorn==21.2.0
 Werkzeug==2.2.3
 Flask==2.2.5
+twilio

@@ -1,12 +1,47 @@
 import joblib, json, threading, time, ssl, os
+import smtplib
 import numpy as np, pandas as pd
 import paho.mqtt.client as mqtt
 from collections import deque
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from dash import Dash, dcc, html, Output, Input, callback_context
 import plotly.graph_objects as go
 from pipeline_ecg import ecg_filt, get_rp, get_rr, qc, hrv
+from twilio.rest import Client as TwilioClient
 
-# ── Modèle ──
+# ══════════════════════════════════════════
+# ── CONFIG EMAIL ──
+# ══════════════════════════════════════════
+EMAIL_FROM = "issrasaidi13@gmail.com"        # ← ton Gmail
+EMAIL_PASS = "lolo kccm apnu uwyu"        # ← mot de passe app Gmail
+EMAIL_TO   = [
+    "issra.saidi@univgb.tn",                  # ← email médecin
+    "famille@gmail.com",                  # ← email famille
+]
+
+# ══════════════════════════════════════════
+# ── CONFIG SMS TWILIO ──
+# ══════════════════════════════════════════
+TWILIO_SID   = "US6fb0de42a3a7cf3d31f2f4386de58fa4"      # ← Account SID Twilio
+TWILIO_TOKEN = "9NCRWZ95U5G4DFM28XKE9HL3"        # ← Auth Token Twilio
+TWILIO_FROM  = "+21694137899"            # ← numéro Twilio
+TWILIO_TO    = [
+    "+216987895",                       # ← numéro médecin
+    "+21622XXXXXX",                       # ← numéro famille
+]
+
+# ══════════════════════════════════════════
+# ── CONFIG HIVEMQ ──
+# ══════════════════════════════════════════
+HIVEMQ_HOST = "79234fef6e85454480c0ce543e7dcecb.s1.eu.hivemq.cloud"
+HIVEMQ_PORT = 8883
+HIVEMQ_USER = "Issra"
+HIVEMQ_PASS = "Issra2026"
+
+# ══════════════════════════════════════════
+# ── CHARGER MODÈLE ──
+# ══════════════════════════════════════════
 mdl      = joblib.load("svm_epilepsie.pkl")
 params   = json.load(open("params_epilepsie.json"))
 bg_stats = json.load(open("bg_stats_epilepsie.json"))
@@ -23,7 +58,9 @@ PATIENT_ID   = list(bg_stats.keys())[0]
 PATIENT_NAME = "Issra Saidi"
 print(f"Patient : {PATIENT_NAME}")
 
-# ── Buffers ──
+# ══════════════════════════════════════════
+# ── BUFFERS ──
+# ══════════════════════════════════════════
 buf_ch1   = deque(maxlen=BUF_SIZE)
 hist_t    = deque(maxlen=5000)
 hist_ecg  = deque(maxlen=5000)
@@ -36,12 +73,85 @@ last_alert  = -np.inf
 alert_count = 0
 start_time  = time.time()
 
-# ── HiveMQ ──
-HIVEMQ_HOST = "79234fef6e85454480c0ce543e7dcecb.s1.eu.hivemq.cloud"
-HIVEMQ_PORT = 8883
-HIVEMQ_USER = "Issra"
-HIVEMQ_PASS = "Issra2026"
+# ══════════════════════════════════════════
+# ── FONCTIONS ALERTE ──
+# ══════════════════════════════════════════
+def send_alert_email(proba, t_now):
+    try:
+        msg = MIMEMultipart()
+        msg["From"]    = EMAIL_FROM
+        msg["To"]      = ", ".join(EMAIL_TO)
+        msg["Subject"] = "⚠ ALERTE CRISE EPILEPTIQUE — Issra Saidi"
 
+        heure = time.strftime('%d/%m/%Y %H:%M:%S', time.localtime(t_now))
+        body  = f"""
+⚠ ALERTE MÉDICALE AUTOMATIQUE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Patient     : {PATIENT_NAME}
+Événement   : Crise épileptique prédite
+Probabilité : {proba*100:.1f}%
+Date/Heure  : {heure}
+
+🔗 Dashboard temps réel :
+https://ecg-monitor-pxbt.onrender.com
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Ce message est généré automatiquement
+par le système de surveillance ECG IoT.
+        """
+
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(EMAIL_FROM, EMAIL_PASS)
+        server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+        server.quit()
+        print(f"✅ Email envoyé à {EMAIL_TO}")
+
+    except Exception as e:
+        print(f"❌ Email erreur: {e}")
+
+
+def send_alert_sms(proba, t_now):
+    try:
+        client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
+        heure  = time.strftime('%H:%M:%S', time.localtime(t_now))
+        body   = (
+            f"ALERTE CRISE - {PATIENT_NAME}\n"
+            f"Probabilite: {proba*100:.1f}%\n"
+            f"Heure: {heure}\n"
+            f"Dashboard: https://ecg-monitor-pxbt.onrender.com"
+        )
+        for numero in TWILIO_TO:
+            client.messages.create(
+                body=body,
+                from_=TWILIO_FROM,
+                to=numero
+            )
+            print(f"✅ SMS envoyé à {numero}")
+
+    except Exception as e:
+        print(f"❌ SMS erreur: {e}")
+
+
+def publish_mqtt_alert(proba, t_now):
+    try:
+        alert_msg = json.dumps({
+            "alert":   1,
+            "patient": PATIENT_NAME,
+            "proba":   round(proba, 3),
+            "t":       t_now
+        })
+        mqtt_client.publish("ecg/alert", alert_msg)
+        print("✅ Alerte MQTT publiée → ecg/alert")
+    except Exception as e:
+        print(f"❌ MQTT alert erreur: {e}")
+
+
+# ══════════════════════════════════════════
+# ── MQTT ──
+# ══════════════════════════════════════════
 def on_connect(client, userdata, flags, rc):
     print(f"HiveMQ connecté rc={rc}")
     client.subscribe("ecg/data")
@@ -65,7 +175,9 @@ mqtt_client.on_message = on_message
 mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT)
 mqtt_client.loop_start()
 
-# ── Thread inférence ──
+# ══════════════════════════════════════════
+# ── THREAD INFÉRENCE ──
+# ══════════════════════════════════════════
 def run_inference():
     global consec, last_alert, alert_count
     while True:
@@ -85,6 +197,7 @@ def run_inference():
                 print("QC échoué"); continue
             ft = hrv(rr)
             if ft is None: continue
+
             bs  = bg_stats.get(PATIENT_ID, {})
             med = bs.get("median", {})
             iqr = bs.get("iqr", {})
@@ -92,24 +205,50 @@ def run_inference():
             for col in FEATS:
                 m = med.get(col, 0); s = iqr.get(col, 1)
                 fv[col] = (fv[col] - m) / (s if s > 1e-8 else 1)
+
             proba = float(mdl.predict_proba(
                 fv.fillna(0).values.reshape(1,-1))[0,1])
             print(f"Proba={proba:.4f} seuil={THR:.4f}")
+
             consec = consec + 1 if proba >= THR else 0
             alert  = 0
+
             if consec >= N_CONSEC and (t_now - last_alert) >= COOLDOWN:
-                alert = 1; last_alert = t_now
-                consec = 0; alert_count += 1
-                print("⚠ ALERTE CRISE")
+                alert      = 1
+                last_alert = t_now
+                consec     = 0
+                alert_count += 1
+                print(f"⚠ ALERTE CRISE #{alert_count}")
+
+                # ── Envoyer toutes les alertes en parallèle ──
+                threading.Thread(
+                    target=publish_mqtt_alert,
+                    args=(proba, t_now),
+                    daemon=True
+                ).start()
+                threading.Thread(
+                    target=send_alert_email,
+                    args=(proba, t_now),
+                    daemon=True
+                ).start()
+                threading.Thread(
+                    target=send_alert_sms,
+                    args=(proba, t_now),
+                    daemon=True
+                ).start()
+
             with lock:
                 hist_prob.append((t_now, proba))
                 hist_al.append((t_now, alert))
+
         except Exception as e:
             print(f"Inférence erreur: {e}")
 
 threading.Thread(target=run_inference, daemon=True).start()
 
-# ── Couleurs ──
+# ══════════════════════════════════════════
+# ── COULEURS ──
+# ══════════════════════════════════════════
 BG    = "#0A0F1E"
 CARD  = "#0D1528"
 BDR   = "#1E2D4A"
@@ -135,21 +274,26 @@ CARD_STYLE = {
     "borderRadius": "10px", "padding": "14px",
 }
 
-app  = Dash(__name__)
-server = app.server   # pour gunicorn / Render
+# ══════════════════════════════════════════
+# ── DASHBOARD ──
+# ══════════════════════════════════════════
+app    = Dash(__name__)
+server = app.server
 
-app.layout = html.Div(style={"background":BG,"minHeight":"100vh",
-                              "fontFamily":"monospace","color":TEXT}, children=[
+app.layout = html.Div(
+    style={"background":BG,"minHeight":"100vh","fontFamily":"monospace","color":TEXT},
+    children=[
 
     # Header
-    html.Div(style={"display":"flex","alignItems":"center","justifyContent":"space-between",
-                    "padding":"14px 24px","borderBottom":f"1px solid {BDR}","background":CARD},
-    children=[
+    html.Div(style={
+        "display":"flex","alignItems":"center","justifyContent":"space-between",
+        "padding":"14px 24px","borderBottom":f"1px solid {BDR}","background":CARD,
+    }, children=[
         html.Div(style={"display":"flex","alignItems":"center","gap":"12px"}, children=[
             html.Span("♥", style={"fontSize":"28px","color":BLUE}),
             html.Div([
-                html.Div("ECG MONITOR", style={"fontSize":"18px","fontWeight":"700",
-                                               "color":BLUE,"letterSpacing":"2px"}),
+                html.Div("ECG MONITOR",
+                         style={"fontSize":"18px","fontWeight":"700","color":BLUE,"letterSpacing":"2px"}),
                 html.Div(f"Patient : {PATIENT_NAME}  —  Prédiction crises épileptiques",
                          style={"fontSize":"11px","color":MUTED}),
             ]),
@@ -161,10 +305,12 @@ app.layout = html.Div(style={"background":BG,"minHeight":"100vh",
     ]),
 
     # Métriques
-    html.Div(id="metrics-row", style={"display":"grid","gridTemplateColumns":"repeat(4,1fr)",
-                                       "gap":"12px","padding":"16px 24px 0"}),
+    html.Div(id="metrics-row", style={
+        "display":"grid","gridTemplateColumns":"repeat(4,1fr)",
+        "gap":"12px","padding":"16px 24px 0",
+    }),
 
-    # Contrôles
+    # Contrôles fenêtre
     html.Div(style={"display":"flex","alignItems":"center","gap":"8px","padding":"12px 24px"},
     children=[
         html.Span("FENÊTRE :", style={"fontSize":"10px","color":MUTED}),
@@ -187,7 +333,7 @@ app.layout = html.Div(style={"background":BG,"minHeight":"100vh",
         dcc.Store(id="win-store", data=30),
     ]),
 
-    # Alerte
+    # Banner alerte
     html.Div(id="alert-div", style={"padding":"0 24px 10px"}),
 
     # Graphiques
@@ -212,10 +358,11 @@ app.layout = html.Div(style={"background":BG,"minHeight":"100vh",
         ]),
     ]),
 
-    # Status
-    html.Div(id="status-div", style={"padding":"10px 28px","borderTop":f"1px solid {BDR}",
-                                      "marginTop":"14px","fontSize":"10px","color":MUTED,
-                                      "display":"flex","gap":"24px"}),
+    # Status bar
+    html.Div(id="status-div", style={
+        "padding":"10px 28px","borderTop":f"1px solid {BDR}","marginTop":"14px",
+        "fontSize":"10px","color":MUTED,"display":"flex","gap":"24px",
+    }),
 
     dcc.Interval(id="tick", interval=1000, n_intervals=0),
 ])
@@ -227,11 +374,11 @@ app.layout = html.Div(style={"background":BG,"minHeight":"100vh",
     Input("btn-60","n_clicks"), Input("btn-all","n_clicks"),
     prevent_initial_call=True,
 )
-def set_win(b10,b30,b60,ball):
+def set_win(b10, b30, b60, ball):
     ctx = callback_context
     if not ctx.triggered: return 30
     btn = ctx.triggered[0]["prop_id"].split(".")[0]
-    return {"btn-10":10,"btn-30":30,"btn-60":60,"btn-all":99999}.get(btn,30)
+    return {"btn-10":10,"btn-30":30,"btn-60":60,"btn-all":99999}.get(btn, 30)
 
 
 @app.callback(
@@ -280,14 +427,19 @@ def update(_, win_s):
     metrics = [
         mcard("FRÉQUENCE",  f"{FS} Hz",   BLUE,  "Échantillonnage ESP32"),
         mcard("BUFFER",     f"{buf_pct}%", GREEN, f"{n_buf:,} / {BUF_SIZE:,} samples"),
-        mcard("PROBA SVM",  last_p, RED if v_prob and v_prob[-1]>=THR else BLUE, f"Seuil : {THR:.3f}"),
-        mcard("ALERTES",    str(alert_count), RED if alert_count>0 else YEL, f"Durée : {upt_str}"),
+        mcard("PROBA SVM",  last_p,
+              RED if v_prob and v_prob[-1]>=THR else BLUE,
+              f"Seuil : {THR:.3f}"),
+        mcard("ALERTES",    str(alert_count),
+              RED if alert_count>0 else YEL,
+              f"Durée : {upt_str}"),
     ]
 
     # ECG
     fig_ecg = go.Figure()
     if v_ecg:
-        fig_ecg.add_trace(go.Scatter(x=t_ecg, y=v_ecg, mode="lines",
+        fig_ecg.add_trace(go.Scatter(
+            x=t_ecg, y=v_ecg, mode="lines",
             line=dict(color=BLUE, width=1.2),
             fill="tozeroy", fillcolor="rgba(0,200,255,0.05)"))
     fig_ecg.update_layout(**PLOT, uirevision="ecg",
@@ -298,8 +450,10 @@ def update(_, win_s):
     prob_layout["yaxis"] = dict(range=[-0.05,1.05], gridcolor=BDR, zerolinecolor=BDR)
     fig_prob = go.Figure()
     if v_pr:
-        fig_prob.add_trace(go.Scatter(x=t_pr, y=v_pr, mode="lines+markers",
-            line=dict(color=GREEN, width=2), marker=dict(size=4, color=GREEN),
+        fig_prob.add_trace(go.Scatter(
+            x=t_pr, y=v_pr, mode="lines+markers",
+            line=dict(color=GREEN, width=2),
+            marker=dict(size=4, color=GREEN),
             fill="tozeroy", fillcolor="rgba(0,255,156,0.05)"))
         fig_prob.add_hrect(y0=THR, y1=1.05,
                            fillcolor="rgba(255,69,96,0.07)", line_width=0)
@@ -325,24 +479,36 @@ def update(_, win_s):
     banner = []
     if alert_count > 0 and v_al and v_al[-1] == 1:
         banner = html.Div(style={
-            "background":"rgba(255,69,96,0.1)","border":f"1px solid {RED}",
-            "borderRadius":"8px","padding":"10px 16px",
+            "background":"rgba(255,69,96,0.1)",
+            "border":f"1px solid {RED}",
+            "borderRadius":"8px","padding":"12px 16px",
             "display":"flex","alignItems":"center","gap":"10px",
-            "color":RED,"fontSize":"12px",
+            "color":RED,"fontSize":"13px",
         }, children=[
-            html.Span("⚠", style={"fontSize":"18px"}),
-            html.Span(f"ALERTE — Crise épileptique prédite pour {PATIENT_NAME} ({alert_count} alerte(s))",
-                      style={"fontWeight":"700"}),
+            html.Span("⚠", style={"fontSize":"22px"}),
+            html.Div([
+                html.Div(
+                    f"ALERTE — Crise épileptique prédite pour {PATIENT_NAME}",
+                    style={"fontWeight":"700","marginBottom":"4px"}
+                ),
+                html.Div(
+                    f"Email envoyé à {', '.join(EMAIL_TO)} | SMS envoyé à {', '.join(TWILIO_TO)}",
+                    style={"fontSize":"11px","opacity":"0.8"}
+                ),
+            ]),
         ])
 
+    # Status
     status = [
         html.Span(f"PATIENT : {PATIENT_NAME}"),
         html.Span("BROKER : HiveMQ Cloud"),
         html.Span(f"SAMPLES : {len(v_ecg):,}"),
         html.Span(f"FENÊTRE : {win_s}s"),
         html.Span(f"UPTIME : {upt_str}"),
-        html.Span(f"● BUFFER {'PRÊT' if n_buf>=BUF_SIZE else f'{buf_pct}%'}",
-                  style={"color": GREEN if n_buf>=BUF_SIZE else YEL}),
+        html.Span(
+            f"● BUFFER {'PRÊT' if n_buf>=BUF_SIZE else f'{buf_pct}%'}",
+            style={"color": GREEN if n_buf>=BUF_SIZE else YEL}
+        ),
     ]
 
     return metrics, fig_ecg, fig_prob, fig_al, banner, status
