@@ -1,0 +1,12 @@
+dash==2.14.0
+plotly==5.18.0
+paho-mqtt==1.6.1
+pandas
+numpy
+scipy
+mne
+neurokit2
+scikit-learn
+joblib
+antropy
+gunicorn
