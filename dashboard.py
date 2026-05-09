@@ -8,27 +8,27 @@ from email.mime.multipart import MIMEMultipart
 from dash import Dash, dcc, html, Output, Input, callback_context
 import plotly.graph_objects as go
 from pipeline_ecg import ecg_filt, get_rp, get_rr, qc, hrv
-from twilio.rest import Client as TwilioClient
 
 # ══════════════════════════════════════════
 # ── CONFIG EMAIL ──
 # ══════════════════════════════════════════
-EMAIL_FROM = "issrasaidi13@gmail.com"        # ← ton Gmail
-EMAIL_PASS = "lolo kccm apnu uwyu"        # ← mot de passe app Gmail
+EMAIL_FROM = "issrasaidi13@gmail.com"
+EMAIL_PASS = "lolo kccm apnu uwyu"
 EMAIL_TO   = [
-    "issra.saidi@univgb.tn",                  # ← email médecin
-    "famille@gmail.com",                  # ← email famille
+    "issra.saidi@univgb.tn",
+    "famille@gmail.com",
 ]
 
 # ══════════════════════════════════════════
 # ── CONFIG SMS TWILIO ──
 # ══════════════════════════════════════════
-TWILIO_SID   = "US6fb0de42a3a7cf3d31f2f4386de58fa4"      # ← Account SID Twilio
-TWILIO_TOKEN = "9NCRWZ95U5G4DFM28XKE9HL3"        # ← Auth Token Twilio
-TWILIO_FROM  = "+21694137899"            # ← numéro Twilio
-TWILIO_TO    = [
-    "+216987895",                       # ← numéro médecin
-    "+21622XXXXXX",                       # ← numéro famille
+TWILIO_ENABLED = True
+TWILIO_SID     = "US6fb0de42a3a7cf3d31f2f4386de58fa4"
+TWILIO_TOKEN   = "9NCRWZ95U5G4DFM28XKE9HL3"
+TWILIO_FROM    = "+21694137899"
+TWILIO_TO      = [
+    "+216987895",
+    "+21622XXXXXX",
 ]
 
 # ══════════════════════════════════════════
@@ -82,7 +82,6 @@ def send_alert_email(proba, t_now):
         msg["From"]    = EMAIL_FROM
         msg["To"]      = ", ".join(EMAIL_TO)
         msg["Subject"] = "⚠ ALERTE CRISE EPILEPTIQUE — Issra Saidi"
-
         heure = time.strftime('%d/%m/%Y %H:%M:%S', time.localtime(t_now))
         body  = f"""
 ⚠ ALERTE MÉDICALE AUTOMATIQUE
@@ -100,7 +99,6 @@ https://ecg-monitor-pxbt.onrender.com
 Ce message est généré automatiquement
 par le système de surveillance ECG IoT.
         """
-
         msg.attach(MIMEText(body, "plain", "utf-8"))
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -108,13 +106,16 @@ par le système de surveillance ECG IoT.
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
         server.quit()
         print(f"✅ Email envoyé à {EMAIL_TO}")
-
     except Exception as e:
         print(f"❌ Email erreur: {e}")
 
 
 def send_alert_sms(proba, t_now):
+    if not TWILIO_ENABLED:
+        print("SMS désactivé")
+        return
     try:
+        from twilio.rest import Client as TwilioClient
         client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
         heure  = time.strftime('%H:%M:%S', time.localtime(t_now))
         body   = (
@@ -124,13 +125,8 @@ def send_alert_sms(proba, t_now):
             f"Dashboard: https://ecg-monitor-pxbt.onrender.com"
         )
         for numero in TWILIO_TO:
-            client.messages.create(
-                body=body,
-                from_=TWILIO_FROM,
-                to=numero
-            )
+            client.messages.create(body=body, from_=TWILIO_FROM, to=numero)
             print(f"✅ SMS envoyé à {numero}")
-
     except Exception as e:
         print(f"❌ SMS erreur: {e}")
 
@@ -150,11 +146,18 @@ def publish_mqtt_alert(proba, t_now):
 
 
 # ══════════════════════════════════════════
-# ── MQTT ──
+# ── MQTT AVEC RECONNEXION AUTOMATIQUE ──
 # ══════════════════════════════════════════
 def on_connect(client, userdata, flags, rc):
     print(f"HiveMQ connecté rc={rc}")
-    client.subscribe("ecg/data")
+    if rc == 0:
+        client.subscribe("ecg/data")
+        print("✅ Abonné à ecg/data")
+    else:
+        print(f"❌ Connexion refusée rc={rc}")
+
+def on_disconnect(client, userdata, rc):
+    print(f"⚠ HiveMQ déconnecté rc={rc} — reconnexion automatique...")
 
 def on_message(client, userdata, msg):
     try:
@@ -164,16 +167,43 @@ def on_message(client, userdata, msg):
             hist_t.append(float(d["t"]) / 1000.0)
             hist_ecg.append(float(d["c1"]))
     except Exception as e:
-        print(f"MQTT erreur: {e}")
+        print(f"MQTT message erreur: {e}")
+
+
+def mqtt_connect():
+    try:
+        mqtt_client.username_pw_set(HIVEMQ_USER, HIVEMQ_PASS)
+        mqtt_client.tls_set(cert_reqs=ssl.CERT_NONE)
+        mqtt_client.tls_insecure_set(True)
+        mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT, keepalive=60)
+        mqtt_client.loop_start()
+        print("HiveMQ connexion initiée...")
+    except Exception as e:
+        print(f"❌ HiveMQ erreur connexion: {e}")
+
+
+def mqtt_watchdog():
+    """Vérifie la connexion MQTT toutes les 30s et reconnecte si nécessaire"""
+    while True:
+        time.sleep(30)
+        try:
+            if not mqtt_client.is_connected():
+                print("⚠ HiveMQ déconnecté — tentative reconnexion...")
+                try:
+                    mqtt_client.reconnect()
+                except Exception:
+                    mqtt_connect()
+        except Exception as e:
+            print(f"Watchdog erreur: {e}")
+
 
 mqtt_client = mqtt.Client()
-mqtt_client.username_pw_set(HIVEMQ_USER, HIVEMQ_PASS)
-mqtt_client.tls_set(cert_reqs=ssl.CERT_NONE)
-mqtt_client.tls_insecure_set(True)
-mqtt_client.on_connect = on_connect
-mqtt_client.on_message = on_message
-mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT)
-mqtt_client.loop_start()
+mqtt_client.on_connect    = on_connect
+mqtt_client.on_disconnect = on_disconnect
+mqtt_client.on_message    = on_message
+mqtt_connect()
+threading.Thread(target=mqtt_watchdog, daemon=True).start()
+
 
 # ══════════════════════════════════════════
 # ── THREAD INFÉRENCE ──
@@ -197,7 +227,6 @@ def run_inference():
                 print("QC échoué"); continue
             ft = hrv(rr)
             if ft is None: continue
-
             bs  = bg_stats.get(PATIENT_ID, {})
             med = bs.get("median", {})
             iqr = bs.get("iqr", {})
@@ -205,42 +234,21 @@ def run_inference():
             for col in FEATS:
                 m = med.get(col, 0); s = iqr.get(col, 1)
                 fv[col] = (fv[col] - m) / (s if s > 1e-8 else 1)
-
             proba = float(mdl.predict_proba(
                 fv.fillna(0).values.reshape(1,-1))[0,1])
             print(f"Proba={proba:.4f} seuil={THR:.4f}")
-
             consec = consec + 1 if proba >= THR else 0
             alert  = 0
-
             if consec >= N_CONSEC and (t_now - last_alert) >= COOLDOWN:
-                alert      = 1
-                last_alert = t_now
-                consec     = 0
-                alert_count += 1
+                alert = 1; last_alert = t_now
+                consec = 0; alert_count += 1
                 print(f"⚠ ALERTE CRISE #{alert_count}")
-
-                # ── Envoyer toutes les alertes en parallèle ──
-                threading.Thread(
-                    target=publish_mqtt_alert,
-                    args=(proba, t_now),
-                    daemon=True
-                ).start()
-                threading.Thread(
-                    target=send_alert_email,
-                    args=(proba, t_now),
-                    daemon=True
-                ).start()
-                threading.Thread(
-                    target=send_alert_sms,
-                    args=(proba, t_now),
-                    daemon=True
-                ).start()
-
+                threading.Thread(target=publish_mqtt_alert, args=(proba, t_now), daemon=True).start()
+                threading.Thread(target=send_alert_email,   args=(proba, t_now), daemon=True).start()
+                threading.Thread(target=send_alert_sms,     args=(proba, t_now), daemon=True).start()
             with lock:
                 hist_prob.append((t_now, proba))
                 hist_al.append((t_now, alert))
-
         except Exception as e:
             print(f"Inférence erreur: {e}")
 
@@ -293,14 +301,17 @@ app.layout = html.Div(
             html.Span("♥", style={"fontSize":"28px","color":BLUE}),
             html.Div([
                 html.Div("ECG MONITOR",
-                         style={"fontSize":"18px","fontWeight":"700","color":BLUE,"letterSpacing":"2px"}),
+                         style={"fontSize":"18px","fontWeight":"700",
+                                "color":BLUE,"letterSpacing":"2px"}),
                 html.Div(f"Patient : {PATIENT_NAME}  —  Prédiction crises épileptiques",
                          style={"fontSize":"11px","color":MUTED}),
             ]),
         ]),
         html.Div(style={"display":"flex","alignItems":"center","gap":"8px"}, children=[
-            html.Div(style={"width":"10px","height":"10px","borderRadius":"50%","background":GREEN}),
-            html.Span("ACQUISITION EN COURS", style={"fontSize":"11px","color":GREEN}),
+            html.Div(style={"width":"10px","height":"10px",
+                            "borderRadius":"50%","background":GREEN}),
+            html.Span("ACQUISITION EN COURS",
+                      style={"fontSize":"11px","color":GREEN}),
         ]),
     ]),
 
@@ -341,19 +352,26 @@ app.layout = html.Div(
     children=[
         html.Div(style=CARD_STYLE, children=[
             html.Div("SIGNAL ECG BRUT — VOIE 1",
-                     style={"fontSize":"10px","color":MUTED,"letterSpacing":"2px","marginBottom":"8px"}),
-            dcc.Graph(id="g-ecg", style={"height":"200px"}, config={"displayModeBar":False}),
+                     style={"fontSize":"10px","color":MUTED,
+                            "letterSpacing":"2px","marginBottom":"8px"}),
+            dcc.Graph(id="g-ecg", style={"height":"200px"},
+                      config={"displayModeBar":False}),
         ]),
-        html.Div(style={"display":"grid","gridTemplateColumns":"1fr 1fr","gap":"12px"}, children=[
+        html.Div(style={"display":"grid","gridTemplateColumns":"1fr 1fr","gap":"12px"},
+        children=[
             html.Div(style=CARD_STYLE, children=[
                 html.Div("PROBABILITÉ CRISE (SVM)",
-                         style={"fontSize":"10px","color":MUTED,"letterSpacing":"2px","marginBottom":"8px"}),
-                dcc.Graph(id="g-prob", style={"height":"180px"}, config={"displayModeBar":False}),
+                         style={"fontSize":"10px","color":MUTED,
+                                "letterSpacing":"2px","marginBottom":"8px"}),
+                dcc.Graph(id="g-prob", style={"height":"180px"},
+                          config={"displayModeBar":False}),
             ]),
             html.Div(style=CARD_STYLE, children=[
                 html.Div("HISTORIQUE ALERTES",
-                         style={"fontSize":"10px","color":MUTED,"letterSpacing":"2px","marginBottom":"8px"}),
-                dcc.Graph(id="g-alert", style={"height":"180px"}, config={"displayModeBar":False}),
+                         style={"fontSize":"10px","color":MUTED,
+                                "letterSpacing":"2px","marginBottom":"8px"}),
+                dcc.Graph(id="g-alert", style={"height":"180px"},
+                          config={"displayModeBar":False}),
             ]),
         ]),
     ]),
@@ -415,17 +433,20 @@ def update(_, win_s):
     last_p  = f"{v_prob[-1]:.3f}" if v_prob else "—"
     uptime  = int(time.time() - start_time)
     upt_str = f"{uptime//3600:02d}:{(uptime%3600)//60:02d}:{uptime%60:02d}"
+    mqtt_ok = mqtt_client.is_connected()
 
     def mcard(label, value, color, sub):
-        return html.Div(style={**CARD_STYLE,"borderTop":f"2px solid {color}","padding":"12px 16px"},
-        children=[
-            html.Div(label, style={"fontSize":"10px","color":MUTED,"letterSpacing":"1.5px","marginBottom":"6px"}),
+        return html.Div(style={
+            **CARD_STYLE,"borderTop":f"2px solid {color}","padding":"12px 16px"
+        }, children=[
+            html.Div(label, style={"fontSize":"10px","color":MUTED,
+                                   "letterSpacing":"1.5px","marginBottom":"6px"}),
             html.Div(value, style={"fontSize":"24px","fontWeight":"700","color":color}),
             html.Div(sub,   style={"fontSize":"11px","color":MUTED,"marginTop":"4px"}),
         ])
 
     metrics = [
-        mcard("FRÉQUENCE",  f"{FS} Hz",   BLUE,  "Échantillonnage ESP32"),
+        mcard("FRÉQUENCE",  f"{FS} Hz",   BLUE,  "Échantillonnage M5StickC"),
         mcard("BUFFER",     f"{buf_pct}%", GREEN, f"{n_buf:,} / {BUF_SIZE:,} samples"),
         mcard("PROBA SVM",  last_p,
               RED if v_prob and v_prob[-1]>=THR else BLUE,
@@ -441,20 +462,23 @@ def update(_, win_s):
         fig_ecg.add_trace(go.Scatter(
             x=t_ecg, y=v_ecg, mode="lines",
             line=dict(color=BLUE, width=1.2),
-            fill="tozeroy", fillcolor="rgba(0,200,255,0.05)"))
+            fill="tozeroy",
+            fillcolor="rgba(0,200,255,0.05)"))
     fig_ecg.update_layout(**PLOT, uirevision="ecg",
         yaxis_title="ADC", xaxis_title="Temps (s)")
 
     # Probabilité
     prob_layout = {**PLOT, "uirevision":"prob"}
-    prob_layout["yaxis"] = dict(range=[-0.05,1.05], gridcolor=BDR, zerolinecolor=BDR)
+    prob_layout["yaxis"] = dict(
+        range=[-0.05,1.05], gridcolor=BDR, zerolinecolor=BDR)
     fig_prob = go.Figure()
     if v_pr:
         fig_prob.add_trace(go.Scatter(
             x=t_pr, y=v_pr, mode="lines+markers",
             line=dict(color=GREEN, width=2),
             marker=dict(size=4, color=GREEN),
-            fill="tozeroy", fillcolor="rgba(0,255,156,0.05)"))
+            fill="tozeroy",
+            fillcolor="rgba(0,255,156,0.05)"))
         fig_prob.add_hrect(y0=THR, y1=1.05,
                            fillcolor="rgba(255,69,96,0.07)", line_width=0)
     fig_prob.add_hline(y=THR, line_color=RED, line_dash="dot", line_width=1.5,
@@ -464,18 +488,22 @@ def update(_, win_s):
 
     # Alertes
     al_layout = {**PLOT, "uirevision":"al"}
-    al_layout["yaxis"] = dict(range=[-0.1,1.5], gridcolor=BDR, zerolinecolor=BDR)
+    al_layout["yaxis"] = dict(
+        range=[-0.1,1.5], gridcolor=BDR, zerolinecolor=BDR)
     fig_al = go.Figure()
     if t_al2:
         colors = [RED if v==1 else MUTED for v in v_al2]
-        fig_al.add_trace(go.Bar(x=t_al2, y=v_al2, marker_color=colors, width=20))
+        fig_al.add_trace(go.Bar(
+            x=t_al2, y=v_al2, marker_color=colors, width=20))
         for ta, va in zip(t_al2, v_al2):
             if va == 1:
-                fig_al.add_vline(x=ta, line_color=RED, line_dash="dot", line_width=1,
-                                 annotation_text="⚠", annotation_font_color=RED)
+                fig_al.add_vline(x=ta, line_color=RED,
+                                 line_dash="dot", line_width=1,
+                                 annotation_text="⚠",
+                                 annotation_font_color=RED)
     fig_al.update_layout(**al_layout)
 
-    # Banner
+    # Banner alerte
     banner = []
     if alert_count > 0 and v_al and v_al[-1] == 1:
         banner = html.Div(style={
@@ -492,16 +520,17 @@ def update(_, win_s):
                     style={"fontWeight":"700","marginBottom":"4px"}
                 ),
                 html.Div(
-                    f"Email envoyé à {', '.join(EMAIL_TO)} | SMS envoyé à {', '.join(TWILIO_TO)}",
+                    f"Email → {', '.join(EMAIL_TO)} | SMS → {', '.join(TWILIO_TO)}",
                     style={"fontSize":"11px","opacity":"0.8"}
                 ),
             ]),
         ])
 
     # Status
+    mqtt_status = "HiveMQ ✅" if mqtt_ok else "HiveMQ ❌ reconnexion..."
     status = [
         html.Span(f"PATIENT : {PATIENT_NAME}"),
-        html.Span("BROKER : HiveMQ Cloud"),
+        html.Span(f"BROKER : {mqtt_status}"),
         html.Span(f"SAMPLES : {len(v_ecg):,}"),
         html.Span(f"FENÊTRE : {win_s}s"),
         html.Span(f"UPTIME : {upt_str}"),
