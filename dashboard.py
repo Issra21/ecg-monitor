@@ -162,10 +162,25 @@ def on_disconnect(client, userdata, rc):
 def on_message(client, userdata, msg):
     try:
         d = json.loads(msg.payload)
-        with lock:
-            buf_ch1.append(float(d["c1"]))
-            hist_t.append(float(d["t"]) / 1000.0)
-            hist_ecg.append(float(d["c1"]))
+        t_base = float(d["t"]) / 1000.0
+
+        # Format batch : {"b":[v1,v2,...,v25],"t":millis}
+        if "b" in d:
+            batch = d["b"]
+            n = len(batch)
+            with lock:
+                for i, val in enumerate(batch):
+                    t_sample = t_base - (n - 1 - i) / 250.0
+                    buf_ch1.append(float(val))
+                    hist_t.append(t_sample)
+                    hist_ecg.append(float(val))
+        # Format ancien : {"c1":val,"t":millis}
+        elif "c1" in d:
+            with lock:
+                buf_ch1.append(float(d["c1"]))
+                hist_t.append(t_base)
+                hist_ecg.append(float(d["c1"]))
+
     except Exception as e:
         print(f"MQTT message erreur: {e}")
 
