@@ -10,5 +10,5 @@ scikit-learn==1.3.2
 joblib==1.3.2
 antropy==0.1.6
 gunicorn==21.2.0
-Werkzeug==2.3.7
-Flask==2.3.3
+Werkzeug==2.2.3
+Flask==2.2.5
