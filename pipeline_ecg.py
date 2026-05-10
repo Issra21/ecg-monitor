@@ -17,10 +17,10 @@ BP_H   = 40.0
 NOTCH  = 50.0
 WIN_S  = 120
 OVL_S  = 60
-MIN_RP = 60
-MIN_RR = 40
-HR_LO  = 40
-HR_HI  = 150
+MIN_RP = 20
+MIN_RR = 10
+HR_LO  = 30
+HR_HI  = 200
 
 _trapz = getattr(np, "trapezoid", None) or np.trapz
 
@@ -28,8 +28,12 @@ _trapz = getattr(np, "trapezoid", None) or np.trapz
 # ── Filtrage ECG ──
 def ecg_filt(ecg, fs):
     fs = int(fs)
+    # Normaliser le signal ADC vers une plage standard
+    ecg = np.array(ecg, dtype=float)
+    ecg = (ecg - np.mean(ecg)) / (np.std(ecg) + 1e-8) * 500
+    
     nyq = fs / 2
-    b, a = sp_signal.butter(4, [BP_L / nyq, BP_H / nyq], btype='bandpass')
+    b, a = sp_signal.butter(4, [BP_L/nyq, BP_H/nyq], btype='bandpass')
     ef = sp_signal.filtfilt(b, a, ecg)
     if NOTCH < nyq:
         bn, an = sp_signal.iirnotch(NOTCH, Q=30, fs=fs)
