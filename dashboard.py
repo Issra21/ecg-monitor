@@ -32,7 +32,7 @@ TWILIO_TO      = [
 ]
 
 # ══════════════════════════════════════════
-# ── CONFIG HIVEMQ ──
+# ── CONFIG EMQX ──
 # ══════════════════════════════════════════
 HIVEMQ_HOST = "ca3c1512.ala.eu-central-1.emqxsl.com"
 HIVEMQ_PORT = 8883
@@ -105,14 +105,13 @@ par le système de surveillance ECG IoT.
         server.login(EMAIL_FROM, EMAIL_PASS)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
         server.quit()
-        print(f"✅ Email envoyé à {EMAIL_TO}")
+        print(f"✅ Email alerte envoyé à {EMAIL_TO}")
     except Exception as e:
         print(f"❌ Email erreur: {e}")
 
 
 def send_alert_sms(proba, t_now):
     if not TWILIO_ENABLED:
-        print("SMS désactivé")
         return
     try:
         from twilio.rest import Client as TwilioClient
@@ -126,92 +125,11 @@ def send_alert_sms(proba, t_now):
         )
         for numero in TWILIO_TO:
             client.messages.create(body=body, from_=TWILIO_FROM, to=numero)
-            print(f"✅ SMS envoyé à {numero}")
+            print(f"✅ SMS alerte envoyé à {numero}")
     except Exception as e:
         print(f"❌ SMS erreur: {e}")
 
-def send_daily_report():
-    """Envoie un rapport quotidien toutes les 24h"""
-    while True:
-        time.sleep(86400)  # 24 heures
-        try:
-            heure = time.strftime('%d/%m/%Y %H:%M:%S')
-            uptime = int(time.time() - start_time)
-            upt_str = f"{uptime//3600:02d}h{(uptime%3600)//60:02d}min"
 
-            with lock:
-                n_buf  = len(buf_ch1)
-                n_al   = alert_count
-
-            # ── Email rapport quotidien ──
-            msg = MIMEMultipart()
-            msg["From"]    = EMAIL_FROM
-            msg["To"]      = ", ".join(EMAIL_TO)
-            msg["Subject"] = f"✅ Rapport quotidien — Issra Saidi — {time.strftime('%d/%m/%Y')}"
-
-            body = f"""
-✅ RAPPORT QUOTIDIEN — BONNE SANTÉ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Patient     : {PATIENT_NAME}
-Date/Heure  : {heure}
-Durée suivi : {upt_str}
-
-État général : ✅ STABLE — Aucune anomalie critique
-
-Statistiques des dernières 24h :
-  • Nombre de crises détectées : {n_al}
-  • Système de surveillance    : Actif
-  • Acquisition ECG            : En cours (250 Hz)
-
-{"⚠ Attention : " + str(n_al) + " crise(s) détectée(s) aujourd'hui." if n_al > 0 else "✅ Aucune crise détectée — Patient en bonne santé."}
-
-🔗 Dashboard temps réel :
-https://ecg-monitor-pxbt.onrender.com
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Rapport généré automatiquement
-Système de surveillance ECG IoT
-            """
-
-            msg.attach(MIMEText(body, "plain", "utf-8"))
-            server = smtplib.SMTP("smtp.gmail.com", 587)
-            server.starttls()
-            server.login(EMAIL_FROM, EMAIL_PASS)
-            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
-            server.quit()
-            print(f"✅ Rapport quotidien email envoyé")
-
-            # ── SMS rapport quotidien ──
-            if TWILIO_ENABLED:
-                from twilio.rest import Client as TwilioClient
-                client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
-                sms_body = (
-                    f"✅ Rapport quotidien - {PATIENT_NAME}\n"
-                    f"Date: {time.strftime('%d/%m/%Y')}\n"
-                    f"Etat: STABLE\n"
-                    f"Crises detectees: {n_al}\n"
-                    f"{'⚠ Attention: crises detectees!' if n_al > 0 else '✅ Aucune crise - Bonne sante'}\n"
-                    f"Dashboard: https://ecg-monitor-pxbt.onrender.com"
-                )
-                for numero in TWILIO_TO:
-                    client.messages.create(
-                        body=sms_body,
-                        from_=TWILIO_FROM,
-                        to=numero
-                    )
-                print(f"✅ Rapport quotidien SMS envoyé")
-
-            # Remettre le compteur d'alertes à 0 pour le prochain jour
-            global alert_count
-            with lock:
-                alert_count = 0
-
-        except Exception as e:
-            print(f"❌ Rapport quotidien erreur: {e}")
-
-# Lancer le thread rapport quotidien
-threading.Thread(target=send_daily_report, daemon=True).start()
 def publish_mqtt_alert(proba, t_now):
     try:
         alert_msg = json.dumps({
@@ -227,10 +145,84 @@ def publish_mqtt_alert(proba, t_now):
 
 
 # ══════════════════════════════════════════
+# ── RAPPORT QUOTIDIEN 24H ──
+# ══════════════════════════════════════════
+def send_daily_report():
+    global alert_count   # ← déclaré en premier, avant tout usage
+    while True:
+        time.sleep(86400)   # 24 heures
+        try:
+            heure   = time.strftime('%d/%m/%Y %H:%M:%S')
+            uptime  = int(time.time() - start_time)
+            upt_str = f"{uptime//3600:02d}h{(uptime%3600)//60:02d}min"
+
+            with lock:
+                n_al = alert_count
+
+            # ── Email rapport ──
+            msg = MIMEMultipart()
+            msg["From"]    = EMAIL_FROM
+            msg["To"]      = ", ".join(EMAIL_TO)
+            msg["Subject"] = f"✅ Rapport quotidien — {PATIENT_NAME} — {time.strftime('%d/%m/%Y')}"
+            body = f"""
+✅ RAPPORT QUOTIDIEN — BONNE SANTÉ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Patient     : {PATIENT_NAME}
+Date/Heure  : {heure}
+Durée suivi : {upt_str}
+
+État général : ✅ STABLE
+
+Statistiques des dernières 24h :
+  • Crises détectées : {n_al}
+  • Système actif   : Oui
+  • Acquisition ECG : En cours ({FS} Hz)
+
+{"⚠ Attention : " + str(n_al) + " crise(s) détectée(s) aujourd'hui." if n_al > 0 else "✅ Aucune crise détectée — Patient en bonne santé."}
+
+🔗 Dashboard temps réel :
+https://ecg-monitor-pxbt.onrender.com
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Rapport généré automatiquement
+Système de surveillance ECG IoT
+            """
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(EMAIL_FROM, EMAIL_PASS)
+            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+            server.quit()
+            print("✅ Rapport quotidien email envoyé")
+
+            # ── SMS rapport ──
+            if TWILIO_ENABLED:
+                from twilio.rest import Client as TwilioClient
+                client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
+                sms_body = (
+                    f"✅ Rapport - {PATIENT_NAME}\n"
+                    f"Date: {time.strftime('%d/%m/%Y')}\n"
+                    f"Crises 24h: {n_al}\n"
+                    f"{'⚠ Crises detectees!' if n_al > 0 else '✅ Bonne sante'}\n"
+                    f"https://ecg-monitor-pxbt.onrender.com"
+                )
+                for numero in TWILIO_TO:
+                    client.messages.create(body=sms_body, from_=TWILIO_FROM, to=numero)
+                print("✅ Rapport quotidien SMS envoyé")
+
+            # Reset compteur pour le prochain jour
+            alert_count = 0
+
+        except Exception as e:
+            print(f"❌ Rapport quotidien erreur: {e}")
+
+
+# ══════════════════════════════════════════
 # ── MQTT AVEC RECONNEXION AUTOMATIQUE ──
 # ══════════════════════════════════════════
 def on_connect(client, userdata, flags, rc):
-    print(f"HiveMQ connecté rc={rc}")
+    print(f"EMQX connecté rc={rc}")
     if rc == 0:
         client.subscribe("ecg/data")
         print("✅ Abonné à ecg/data")
@@ -238,14 +230,13 @@ def on_connect(client, userdata, flags, rc):
         print(f"❌ Connexion refusée rc={rc}")
 
 def on_disconnect(client, userdata, rc):
-    print(f"⚠ HiveMQ déconnecté rc={rc} — reconnexion automatique...")
+    print(f"⚠ EMQX déconnecté rc={rc} — reconnexion automatique...")
 
 def on_message(client, userdata, msg):
     try:
         d = json.loads(msg.payload)
         t_base = float(d["t"]) / 1000.0
-
-        # Format batch : {"b":[v1,v2,...,v25],"t":millis}
+        # Format batch : {"b":[v1,...,v25],"t":millis}
         if "b" in d:
             batch = d["b"]
             n = len(batch)
@@ -255,13 +246,12 @@ def on_message(client, userdata, msg):
                     buf_ch1.append(float(val))
                     hist_t.append(t_sample)
                     hist_ecg.append(float(val))
-        # Format ancien : {"c1":val,"t":millis}
+        # Format simple : {"c1":val,"t":millis}
         elif "c1" in d:
             with lock:
                 buf_ch1.append(float(d["c1"]))
                 hist_t.append(t_base)
                 hist_ecg.append(float(d["c1"]))
-
     except Exception as e:
         print(f"MQTT message erreur: {e}")
 
@@ -273,18 +263,17 @@ def mqtt_connect():
         mqtt_client.tls_insecure_set(True)
         mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT, keepalive=60)
         mqtt_client.loop_start()
-        print("HiveMQ connexion initiée...")
+        print("EMQX connexion initiée...")
     except Exception as e:
-        print(f"❌ HiveMQ erreur connexion: {e}")
+        print(f"❌ EMQX erreur connexion: {e}")
 
 
 def mqtt_watchdog():
-    """Vérifie la connexion MQTT toutes les 30s et reconnecte si nécessaire"""
     while True:
         time.sleep(30)
         try:
             if not mqtt_client.is_connected():
-                print("⚠ HiveMQ déconnecté — tentative reconnexion...")
+                print("⚠ EMQX déconnecté — reconnexion...")
                 try:
                     mqtt_client.reconnect()
                 except Exception:
@@ -348,7 +337,7 @@ def run_inference():
         except Exception as e:
             print(f"Inférence erreur: {e}")
 
-threading.Thread(target=run_inference, daemon=True).start()
+threading.Thread(target=run_inference,    daemon=True).start()
 threading.Thread(target=send_daily_report, daemon=True).start()
 
 # ══════════════════════════════════════════
@@ -624,7 +613,7 @@ def update(_, win_s):
         ])
 
     # Status
-    mqtt_status = "HiveMQ ✅" if mqtt_ok else "HiveMQ ❌ reconnexion..."
+    mqtt_status = "EMQX ✅" if mqtt_ok else "EMQX ❌ reconnexion..."
     status = [
         html.Span(f"PATIENT : {PATIENT_NAME}"),
         html.Span(f"BROKER : {mqtt_status}"),
