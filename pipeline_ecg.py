@@ -9,7 +9,7 @@ from scipy import signal as sp_signal
 from scipy.stats import linregress, entropy as sp_entropy
 import mne
 import neurokit2 as nk
- print("=== IMPORT PIPELINE_ECG ===", flush=True)
+print("=== IMPORT PIPELINE_ECG ===", flush=True)
 # ── Paramètres (identiques au notebook) ──
 BP_L   = 0.5
 BP_H   = 40.0
