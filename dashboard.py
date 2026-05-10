@@ -130,7 +130,88 @@ def send_alert_sms(proba, t_now):
     except Exception as e:
         print(f"❌ SMS erreur: {e}")
 
+def send_daily_report():
+    """Envoie un rapport quotidien toutes les 24h"""
+    while True:
+        time.sleep(86400)  # 24 heures
+        try:
+            heure = time.strftime('%d/%m/%Y %H:%M:%S')
+            uptime = int(time.time() - start_time)
+            upt_str = f"{uptime//3600:02d}h{(uptime%3600)//60:02d}min"
 
+            with lock:
+                n_buf  = len(buf_ch1)
+                n_al   = alert_count
+
+            # ── Email rapport quotidien ──
+            msg = MIMEMultipart()
+            msg["From"]    = EMAIL_FROM
+            msg["To"]      = ", ".join(EMAIL_TO)
+            msg["Subject"] = f"✅ Rapport quotidien — Issra Saidi — {time.strftime('%d/%m/%Y')}"
+
+            body = f"""
+✅ RAPPORT QUOTIDIEN — BONNE SANTÉ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Patient     : {PATIENT_NAME}
+Date/Heure  : {heure}
+Durée suivi : {upt_str}
+
+État général : ✅ STABLE — Aucune anomalie critique
+
+Statistiques des dernières 24h :
+  • Nombre de crises détectées : {n_al}
+  • Système de surveillance    : Actif
+  • Acquisition ECG            : En cours (250 Hz)
+
+{"⚠ Attention : " + str(n_al) + " crise(s) détectée(s) aujourd'hui." if n_al > 0 else "✅ Aucune crise détectée — Patient en bonne santé."}
+
+🔗 Dashboard temps réel :
+https://ecg-monitor-pxbt.onrender.com
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Rapport généré automatiquement
+Système de surveillance ECG IoT
+            """
+
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(EMAIL_FROM, EMAIL_PASS)
+            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+            server.quit()
+            print(f"✅ Rapport quotidien email envoyé")
+
+            # ── SMS rapport quotidien ──
+            if TWILIO_ENABLED:
+                from twilio.rest import Client as TwilioClient
+                client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
+                sms_body = (
+                    f"✅ Rapport quotidien - {PATIENT_NAME}\n"
+                    f"Date: {time.strftime('%d/%m/%Y')}\n"
+                    f"Etat: STABLE\n"
+                    f"Crises detectees: {n_al}\n"
+                    f"{'⚠ Attention: crises detectees!' if n_al > 0 else '✅ Aucune crise - Bonne sante'}\n"
+                    f"Dashboard: https://ecg-monitor-pxbt.onrender.com"
+                )
+                for numero in TWILIO_TO:
+                    client.messages.create(
+                        body=sms_body,
+                        from_=TWILIO_FROM,
+                        to=numero
+                    )
+                print(f"✅ Rapport quotidien SMS envoyé")
+
+            # Remettre le compteur d'alertes à 0 pour le prochain jour
+            global alert_count
+            with lock:
+                alert_count = 0
+
+        except Exception as e:
+            print(f"❌ Rapport quotidien erreur: {e}")
+
+# Lancer le thread rapport quotidien
+threading.Thread(target=send_daily_report, daemon=True).start()
 def publish_mqtt_alert(proba, t_now):
     try:
         alert_msg = json.dumps({
@@ -268,6 +349,7 @@ def run_inference():
             print(f"Inférence erreur: {e}")
 
 threading.Thread(target=run_inference, daemon=True).start()
+threading.Thread(target=send_daily_report, daemon=True).start()
 
 # ══════════════════════════════════════════
 # ── COULEURS ──
