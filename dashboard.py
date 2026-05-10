@@ -34,7 +34,7 @@ TWILIO_TO      = [
 # ══════════════════════════════════════════
 # ── CONFIG HIVEMQ ──
 # ══════════════════════════════════════════
-HIVEMQ_HOST = "79234fef6e85454480c0ce543e7dcecb.s1.eu.hivemq.cloud"
+HIVEMQ_HOST = "ca3c1512.ala.eu-central-1.emqxsl.com"
 HIVEMQ_PORT = 8883
 HIVEMQ_USER = "Issra"
 HIVEMQ_PASS = "Issra2026"
