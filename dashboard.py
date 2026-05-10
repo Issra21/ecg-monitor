@@ -8,7 +8,9 @@ from email.mime.multipart import MIMEMultipart
 from dash import Dash, dcc, html, Output, Input, callback_context
 import plotly.graph_objects as go
 from pipeline_ecg import ecg_filt, get_rp, get_rr, qc, hrv
-
+import sys
+print("=== DÉMARRAGE DASHBOARD ===", flush=True)
+print(f"Python: {sys.version}", flush=True)
 # ══════════════════════════════════════════
 # ── CONFIG EMAIL ──
 # ══════════════════════════════════════════
