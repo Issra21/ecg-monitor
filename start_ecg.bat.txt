@@ -1,0 +1,15 @@
+@echo off
+echo Démarrage système ECG...
+
+:: Démarrer Mosquitto
+start "Mosquitto" "C:\Program Files\mosquitto\mosquitto.exe" -c "C:\Program Files\mosquitto\mosquitto.conf"
+timeout /t 2
+
+:: Démarrer le dashboard Python
+start "Dashboard" cmd /k "cd C:\ecg && venv\Scripts\activate && python dashboard.py"
+timeout /t 3
+
+:: Démarrer ngrok
+start "ngrok" cmd /k "ngrok http 8050 --basic-auth=medecin:issra2024"
+
+echo Tout est démarré.
