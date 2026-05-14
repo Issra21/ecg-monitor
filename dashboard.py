@@ -226,8 +226,8 @@ Système de surveillance ECG IoT
 def on_connect(client, userdata, flags, rc):
     print(f"EMQX connecté rc={rc}")
     if rc == 0:
-        client.subscribe("ecg/data")
-        print("✅ Abonné à ecg/data")
+        client.subscribe("ecg/#")
+        print("✅ Abonné à ecg/#")
     else:
         print(f"❌ Connexion refusée rc={rc}")
 
