@@ -262,7 +262,7 @@ def mqtt_connect():
         mqtt_client.username_pw_set(HIVEMQ_USER, HIVEMQ_PASS)
         mqtt_client.tls_set(cert_reqs=ssl.CERT_NONE)
         mqtt_client.tls_insecure_set(True)
-        mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT, keepalive=60)
+        mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT, keepalive=20)
         mqtt_client.loop_start()
         print("EMQX connexion initiée...")
     except Exception as e:
@@ -271,7 +271,7 @@ def mqtt_connect():
 
 def mqtt_watchdog():
     while True:
-        time.sleep(30)
+        time.sleep(15)
         try:
             if not mqtt_client.is_connected():
                 print("⚠ EMQX déconnecté — reconnexion...")
@@ -283,7 +283,7 @@ def mqtt_watchdog():
             print(f"Watchdog erreur: {e}")
 
 
-mqtt_client = mqtt.Client()
+mqtt_client = mqtt.Client(client_id="render_ecg_issra", protocol=mqtt.MQTTv311)
 mqtt_client.on_connect    = on_connect
 mqtt_client.on_disconnect = on_disconnect
 mqtt_client.on_message    = on_message
