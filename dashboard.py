@@ -95,7 +95,8 @@ Probabilité : {proba*100:.1f}%
 Date/Heure  : {heure}
 
 🔗 Dashboard temps réel :
-https://ecg-monitor-1.onrender.com
+https://ecg-monitor-pxbt.onrender.com
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Ce message est généré automatiquement
 par le système de surveillance ECG IoT.
@@ -183,7 +184,7 @@ Statistiques des dernières 24h :
 {"⚠ Attention : " + str(n_al) + " crise(s) détectée(s) aujourd'hui." if n_al > 0 else "✅ Aucune crise détectée — Patient en bonne santé."}
 
 🔗 Dashboard temps réel :
-https://ecg-monitor-pxbt.onrender.com
+https://ecg-monitor-1.onrender.com
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Rapport généré automatiquement
@@ -226,7 +227,7 @@ def on_connect(client, userdata, flags, rc):
     print(f"EMQX connecté rc={rc}")
     if rc == 0:
         client.subscribe("ecg/data")
-        print("✅ Abonné à ecg/data")
+        print("✅ Abonné à ecg/#")
     else:
         print(f"❌ Connexion refusée rc={rc}")
 
@@ -262,7 +263,7 @@ def mqtt_connect():
         mqtt_client.username_pw_set(HIVEMQ_USER, HIVEMQ_PASS)
         mqtt_client.tls_set(cert_reqs=ssl.CERT_NONE)
         mqtt_client.tls_insecure_set(True)
-        mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT, keepalive=20)
+        mqtt_client.connect(HIVEMQ_HOST, HIVEMQ_PORT, keepalive=60)
         mqtt_client.loop_start()
         print("EMQX connexion initiée...")
     except Exception as e:
@@ -271,7 +272,7 @@ def mqtt_connect():
 
 def mqtt_watchdog():
     while True:
-        time.sleep(15)
+        time.sleep(30)
         try:
             if not mqtt_client.is_connected():
                 print("⚠ EMQX déconnecté — reconnexion...")
@@ -283,7 +284,7 @@ def mqtt_watchdog():
             print(f"Watchdog erreur: {e}")
 
 
-mqtt_client = mqtt.Client(client_id="render_ecg_issra", protocol=mqtt.MQTTv311)
+mqtt_client = mqtt.Client()
 mqtt_client.on_connect    = on_connect
 mqtt_client.on_disconnect = on_disconnect
 mqtt_client.on_message    = on_message
