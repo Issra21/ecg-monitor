@@ -95,8 +95,7 @@ Probabilité : {proba*100:.1f}%
 Date/Heure  : {heure}
 
 🔗 Dashboard temps réel :
-https://ecg-monitor-pxbt.onrender.com
-
+https://ecg-monitor-1.onrender.com
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Ce message est généré automatiquement
 par le système de surveillance ECG IoT.
